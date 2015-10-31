@@ -1,53 +1,49 @@
-// Edge_Detect.cpp : Defines the entry point for the console application.
-#include "stdafx.h"
-#include "stdlib.h"
-#include <string>
-using std::string;
 
-#include <iostream>
-using std::cerr;
-using std::endl;
+//#include <string>
+//using std::string;
+//
+//#include <iostream>
+//using std::cerr;
+//using std::endl;
+//using namespace std;
+//
+//#include <fstream>
+//using std::ofstream;
+//
+//#include <sstream>
+//using std::ostringstream;
+
+//#include "math.h"
+//#include "stdio.h"
+//#include "stdlib.h"
+//#include <ctime>
+//#include <Windows.h>
+
+#include <opencv2/core/core.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/highgui/highgui.hpp>
+using namespace cv;
 using namespace std;
 
-#include <fstream>
-using std::ofstream;
-
-#include <sstream>
-using std::ostringstream;
-
-
-#ifdef _CH_
-#pragma package <opencv>
-#endif
-
-#ifndef _EiC
-#include "cv.h"
-#include "highgui.h"
-#include "math.h"
-#include "stdio.h"
-#include "stdlib.h"
-#include <ctime>
-#include <Windows.h>
-
-#endif
 
 
 string getContours(char* image_file,int fileNumber, bool writeToFile, bool openImageWindow, double hmin_percent, double hmax_percent, double wmin_percent, double wmax_percent )
 {
-        string contours;
+    string contours;
 	int edge_thresh = 80;
 	int i,j;
     uchar r,b,g,rup,bup,gup,rleft,bleft,gleft,mean;
 	int dev;
     uchar *data, *data_eq, *data_jvs, *data_red, *data_blue, *data_green;
 	
-	IplImage *image = 0, *image_eq = 0, *eq = 0, *blured = 0, *cedge = 0, *gray = 0, *edge = 0, *jvs = 0, *red = 0, *blue = 0, *green = 0;
+	Mat image, image_eq, eq, blured, cedge, gray, edge, jvs, red, blue, green;
 	CvMemStorage* storage;
 	CvSeq* lines = 0;
 	CvSeq* lines2 = 0;
 	
-	if( (image = cvLoadImage( image_file, 1)) == 0 )
-        return "";	
+	image = imread(image_file, CV_LOAD_IMAGE_COLOR);
+	if (image.empty())
+        return "";
 	
     storage = cvCreateMemStorage(0);
 	
@@ -59,8 +55,7 @@ string getContours(char* image_file,int fileNumber, bool writeToFile, bool openI
 	green = cvCreateImage(cvSize(image->width,image->height), IPL_DEPTH_8U, 1);
 	blue = cvCreateImage(cvSize(image->width,image->height), IPL_DEPTH_8U, 1);
 
-	
-	cvSmooth( image, blured, CV_BLUR, 3, 3, 0, 0 ); // tunable mask size
+	blur(image, blured, Size(3, 3));
 
     data = (uchar*)blured->imageData;
 	data_eq = (uchar*)image_eq->imageData;
@@ -70,9 +65,9 @@ string getContours(char* image_file,int fileNumber, bool writeToFile, bool openI
 	data_blue = (uchar*)blue->imageData;
     
     // Need some error checking for hmin,hmax,wmin,wmax to be in range - jarvis
-	for (j=0; j<image->width; j++)
+	for (j=0; j<image.size().width; j++)
 	{
-		for (i=0; i<image->height; i++)
+		for (i=0; i<image.size().height; i++)
 		{
 			r = data[i*blured->widthStep+j*blured->nChannels+2];
 			g = data[i*blured->widthStep+j*blured->nChannels+1];
@@ -136,7 +131,7 @@ string getContours(char* image_file,int fileNumber, bool writeToFile, bool openI
 	float dev_rho_store[4], dev_theta_store[4];
 	int count_store[4];
 
-	for (int cl=0; cl<=3; cl++)
+	for (int cl=3; cl<=3; cl++)
 	{
 		for (i=floor(image->height*hmin_percent); i<floor(image->height*hmax_percent); i++)
 		{
@@ -206,7 +201,7 @@ string getContours(char* image_file,int fileNumber, bool writeToFile, bool openI
 		dev_rho_store[cl] = dev_rho = dev_rho/lines2->total;
 		dev_theta_store[cl] = dev_theta = dev_theta/lines2->total;
 
-		//cout << dev_rho << ", " << dev_theta << endl;
+		cout << dev_rho << ", " << dev_theta << endl;
 
 		for( int i = 0; i < lines->total; i++ )
 		{
@@ -249,7 +244,7 @@ string getContours(char* image_file,int fileNumber, bool writeToFile, bool openI
 	// ********** Combining three colors ****************
 	if (contours.size() < 1000)
 	{
-		for (int cl=0; cl<=0; cl++)
+		for (int cl=0; cl<=2; cl++)
 		{
 			for (i=floor(image->height*hmin_percent); i<floor(image->height*hmax_percent); i++)
 			{
@@ -286,6 +281,7 @@ string getContours(char* image_file,int fileNumber, bool writeToFile, bool openI
 			//cvCopy( image, cedge, NULL );
 
 			float sum_rho=0,sum_theta=0,mean_rho,mean_theta,dev_rho=0,dev_theta=0;
+			
 			for( int i = 0; i < lines2->total; i++ )
 			{
 				float* line = (float*)cvGetSeqElem(lines2,i);
@@ -303,7 +299,7 @@ string getContours(char* image_file,int fileNumber, bool writeToFile, bool openI
 
 			dev_rho_store[cl] = dev_rho = dev_rho/lines2->total;
 			dev_theta_store[cl] = dev_theta = dev_theta/lines2->total;
-			// cout << dev_rho << ", " << dev_theta << endl;
+			cout << dev_rho << ", " << dev_theta << endl;
 			if (dev_rho<20000 && dev_theta<0.8)
 			{
 				for( int i = 0; i < lines->total; i++ )
@@ -328,6 +324,7 @@ string getContours(char* image_file,int fileNumber, bool writeToFile, bool openI
 		}
 	}
 
+	
 	// ****************** gray closeness ***************
 	if (contours.size() < 1000)
 	{
@@ -388,7 +385,7 @@ string getContours(char* image_file,int fileNumber, bool writeToFile, bool openI
 			dev_theta += (line[1]-mean_theta)*(line[1]-mean_theta);
 		}
 
-		// cout << "->" << dev_rho << ", " << dev_theta << endl;
+		cout << "->" << dev_rho << ", " << dev_theta << endl;
 
 		if (dev_rho<100000 && dev_theta<10)
 		{
@@ -408,7 +405,7 @@ string getContours(char* image_file,int fileNumber, bool writeToFile, bool openI
 				oss2 << line[0].y;
 				oss3 << line[1].x;
 				oss4 << line[1].y;
-				//cout << "Hello" << endl;
+				cout << "Hello" << endl;
 				contours = contours+"[|"+oss1.str()+","+oss2.str()+"|"+oss3.str()+","+oss4.str()+"]";
 			}
 		}
@@ -463,6 +460,7 @@ string getContours(char* image_file,int fileNumber, bool writeToFile, bool openI
 		edgeFileName = edgeFileName.erase(pos_point);
 		edgeFileName += "_edge.jpg";
 		cvSaveImage(edgeFileName.c_str(), cedge);
+	
 
 		char ctr_file_name[50];
         sprintf(ctr_file_name ,"%s",image_file);
@@ -477,6 +475,8 @@ string getContours(char* image_file,int fileNumber, bool writeToFile, bool openI
         if(ctrs != NULL) fclose( ctrf );
 	}
 
+	
+
 	if(openImageWindow){
 		cvNamedWindow("orig",1);
 		cvNamedWindow("blur",1);
@@ -490,6 +490,7 @@ string getContours(char* image_file,int fileNumber, bool writeToFile, bool openI
 		cvShowImage("edge", cedge);
 		cvWaitKey(0);
 	}
+
 
 
     // Wait for a key stroke; the same function arranges events processing
@@ -510,23 +511,52 @@ string getContours(char* image_file,int fileNumber, bool writeToFile, bool openI
 
 int main( int argc, char** argv )
 {
-	char* filename = argc == 2 ? argv[1]:(char*)"pics/depth_0062.ppm";
-	ofstream output;
-	clock_t start, end;
-	double elapsed;
+	
+	char * stored_filename[20] =
+	{
+		"pics/depth_0030.ppm",
+		"pics/depth_0031.ppm",
+		"pics/depth_0032.ppm",
+		"pics/depth_0033.ppm",
+		"pics/depth_0034.ppm",
+		"pics/depth_0040.ppm",
+		"pics/depth_0041.ppm",
+		"pics/depth_0042.ppm",
+		"pics/depth_0043.ppm",
+		"pics/depth_0044.ppm",
+		"pics/depth_0045.ppm",
+		"pics/depth_0046.ppm",
+		"pics/depth_0047.ppm",
+		"pics/depth_0048.ppm",
+		"pics/depth_0049.ppm",
+		"pics/depth_0060.ppm",
+		"pics/depth_0061.ppm",
+		"pics/depth_0062.ppm",
+		"pics/depth_0063.ppm",
+		"pics/depth_0064.ppm"
+	};
 
-	start = clock();
+	for (int index = 0; index < 1; index++)
+	{
+		//char* filename = argc == 2 ? argv[1]:stored_filename[index];
+		char* filename = argc == 2 ? argv[1]:"pics/depth_0011.ppm";
+		ofstream output;
+		clock_t start, end;
+		double elapsed;
 
-	// process to be timed -> begins here
-	string ct = getContours(filename,1,true,true,0.0,1.0,0.0,1.0);
-	output.open("output.txt");
-	output << ct << endl;
-	output.close();
-	// process to be timed -> ends here
-	end = clock();
-	elapsed = ((double) (end - start)) / ((double)CLOCKS_PER_SEC);
-	//printf("%f",elapsed);
-	cout << elapsed << endl;
+		start = clock();
+
+		// process to be timed -> begins here
+		string ct = getContours(filename,1,true,true,0.0,1.0,0.0,1.0);
+		output.open("output.txt");
+		output << ct << endl;
+		output.close();
+		// process to be timed -> ends here
+		end = clock();
+		elapsed = ((double) (end - start)) / ((double)CLOCKS_PER_SEC);
+		//printf("%f",elapsed);
+		cout << elapsed << endl;
+	}
 
 	return 0;
 }
