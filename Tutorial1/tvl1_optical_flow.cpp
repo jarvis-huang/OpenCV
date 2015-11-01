@@ -154,8 +154,12 @@ int main(int argc, const char* argv[])
         return -1;
     }
 
-    Mat frame0 = imread(argv[1], IMREAD_GRAYSCALE);
-    Mat frame1 = imread(argv[2], IMREAD_GRAYSCALE);
+    //Mat frame0 = imread(argv[1], IMREAD_GRAYSCALE);
+    //Mat frame1 = imread(argv[2], IMREAD_GRAYSCALE);
+	//Mat frame0 = imread("ball3.png", IMREAD_GRAYSCALE);
+	//Mat frame1 = imread("ball4.png", IMREAD_GRAYSCALE);
+	Mat frame0 = imread("frame10.png", IMREAD_GRAYSCALE);
+	Mat frame1 = imread("frame11.png", IMREAD_GRAYSCALE);
 
     if (frame0.empty())
     {
