@@ -7,47 +7,16 @@
 #include <sstream>
 #include <vector>
 #include <iomanip>
+#include "sift.h"
 
 using namespace cv;
 using namespace std;
 
-#define M_PI 3.14159265358979323846
-#define N_SCALE 3
-#define SIGMA 1.6
 
-// Display the content of a Mat for debugging purposes
-void printMat(Mat mat, int prec)
-{
-	cout << mat.size() << " = [" << endl;
-	for (int i = 0; i<mat.size().height; i++)
-	{
-		for (int j = 0; j<mat.size().width; j++)
-		{
-			cout << setprecision(prec) << mat.at<float>(i, j);
-			if (j != mat.size().width - 1)
-				cout << ", ";
-			else
-				cout << ";" << endl;
-		}
-	}
-	cout << "]" << endl << endl;
-}
 
-// kernel width = height = 2*radius+1
-// Kernel size must be a param because we will calculate difference of two Gaussian kernels of difference sigma.
-// The subtraction requires two kernels to have equal dimension.
-Mat my_gaussian(double sigma, int radius)
-{
-	Mat G(2 * radius + 1, 2 * radius + 1, CV_32F);
-	for (int x = -radius; x <= radius; x++)
-	{
-		for (int y = -radius; y <= radius; y++)
-		{
-			G.at<float>(x + radius, y + radius) = (float) (1/(2*M_PI*pow(sigma,2.0)) * exp((pow(x,2.0) + pow(y,2.0)) / (-2*pow(sigma,2.0))));
-		}
-	}
-	return G;
-}
+
+
+
 
 // kernel width = height = 2*radius+1
 // All elements are zero, except the center is 1
@@ -98,20 +67,27 @@ Mat* build_DoG(int n_oct, int n_scale = N_SCALE, float sigma = SIGMA)
 	return DoG;
 }
 
-void downsample(const Mat& src, Mat& dst)
+
+
+// n = Descriptor array width (n*n array)
+// r = # of orientation bins
+// m = # of neiboring samples per key point (m*m samples)
+void build_orientation_hist(const Mat& img, const vector<Point>& kp, const vector<Point>& kp_scale, vector<float*> descriptor, int n_oct, int n, int r, int m)
 {
-	dst = Mat(src.rows/2, src.cols/2, src.type());
-	for (int r = 0; r < dst.rows; r++) {
-		for (int c = 0; c < dst.cols; c++) {
-			dst.at<float>(r, c) = src.at<float>(2 * r + 1, 2 * c + 1);
+
+	for (int i = 0; i < n_oct; i++) {
+		for (int j = 0; j <= N_SCALE; j++) {
+			Mat G;
+			float sigma = pow(2.0, i + j / (N_SCALE + 1.0))*SIGMA;
+			int width = ceil(3 * sigma) * 2 + 1;
+			GaussianBlur(img, G, cvSize(width, width), sigma);
+			// Another option is to use GaussianBlur() library function
+			//filter2D(start_img, temp, CV_32F, DoG[idx]);
 		}
 	}
 }
 
-void MyFilledCircle(Mat img, Point center)
-{ 
-	circle(img, center, 1, Scalar(0, 0, 255), 1, 8);
-}
+
 
 // Usage: sift.exe image_file
 int main(int argc, char** argv)
@@ -164,6 +140,7 @@ int main(int argc, char** argv)
 	// Also lowest and highest scale images within each octave do not produce any output since they don't have lower/higher scale neighbor.
 	// The output is keypoint locations (x,y). We use Vector<Point> to store them.
 	vector<Point> kp;
+	vector<Point> kp_scale; // stores the scale index (i,j), actual scale = pow(2.0, i+j/(N_SCALE+1.0))*sigma
 	cout << "searching for extrema ..." << endl;
 	for (int i = 0; i < n_oct; i++) {
 		for (int j = 1; j <= N_SCALE-1; j++) {
@@ -171,7 +148,7 @@ int main(int argc, char** argv)
 			Mat cur = img_DoG[i*(N_SCALE + 1) + j];
 			Mat nxt = img_DoG[i*(N_SCALE + 1) + j+1];
 			Mat prev_cur_nxt[] = { cur, prv, nxt };
-			//cout << i << "," << j << "=" << cur.at<float>(7,7) << endl;
+
 			// Skip boundary pixels
 			for (int c = 1; c < cur.cols-1; c++) {
 				for (int r = 1; r < cur.rows-1; r++) {
@@ -227,16 +204,89 @@ int main(int argc, char** argv)
 					float p_nxt = nxt.at<float>(r, c);
 					pass = pass && ((is_min && center < p_nxt) || (is_max && center > p_nxt));
 
-					if (pass)
+					if (pass) {
 						kp.push_back(Point(c, r));
+						kp_scale.push_back(Point(i, j));
+					}
 				}
 			}
 		}
 	}
 
-	// To display a float img, first need to convert to char type
-	//img_float.convertTo(img_out, CV_8U);
+	cout << "# of keypoints (before refinement) = " << kp.size() << endl;
 
+	// Eliminate keypoints along edges
+	// Now we have two vectors: kp, kp_scale
+	// We want to compute Hessian = [Dxx Dxy; Dxy; Dyy] for each kp
+	// img_DoG
+	vector<Point> refined_kp;
+	vector<Point> refined_kp_scale;
+	for (int i = 0; i < kp.size(); i++) {
+		Point loc = kp.at(i);
+		int x = loc.x;
+		int y = loc.y;
+		Point scale = kp_scale.at(i);
+		Mat img_cur = img_DoG[scale.x*(N_SCALE+1) + scale.y];
+		float D = img_cur.at<float>(y, x);
+		float Dx = 0.5*(img_cur.at<float>(y, x + 1) - img_cur.at<float>(y, x - 1));
+		float Dy = 0.5*(img_cur.at<float>(y + 1, x) - img_cur.at<float>(y - 1, x));
+		float Dxx = img_cur.at<float>(y, x + 1) + img_cur.at<float>(y, x - 1) - 2 * img_cur.at<float>(y, x);
+		float Dyy = img_cur.at<float>(y+1, x) + img_cur.at<float>(y-1, x) - 2 * img_cur.at<float>(y, x);
+		float Dxy = 0.25*(img_cur.at<float>(y + 1, x + 1) + img_cur.at<float>(y - 1, x - 1) - img_cur.at<float>(y + 1, x - 1) - img_cur.at<float>(y - 1, x + 1));
+		Mat img_higher = img_DoG[scale.x*(N_SCALE + 1) + scale.y+1];
+		Mat img_lower = img_DoG[scale.x*(N_SCALE + 1) + scale.y - 1];
+		float Ds = 0.5*(img_higher.at<float>(y, x) - img_lower.at<float>(y, x));
+		float Dss = img_higher.at<float>(y, x) + img_lower.at<float>(y, x) - 2 * img_cur.at<float>(y, x);
+		float Dxs = 0.25*(img_higher.at<float>(y, x + 1) + img_lower.at<float>(y, x - 1) - img_higher.at<float>(y, x - 1) - img_lower.at<float>(y, x + 1));
+		float Dys = 0.25*(img_higher.at<float>(y + 1, x) + img_lower.at<float>(y - 1, x) - img_higher.at<float>(y - 1, x) - img_lower.at<float>(y + 1, x));	
+
+		float* lapD[3];
+		lapD[0] = new float[3]{Dxx, Dxy, Dxs};
+		lapD[1] = new float[3]{Dxy, Dyy, Dys};
+		lapD[2] = new float[3]{Dxs, Dys, Dss};
+
+		float* inv_lapD[3];
+		for (int x = 0; x < 3; ++x)
+			inv_lapD[x] = new float[3];
+
+		MatrixInversion((float**)lapD, 3, (float**)inv_lapD);
+		double peak_x = -inv_lapD[0][1] * Dx - inv_lapD[0][1] * Dy - inv_lapD[0][2] * Ds;
+		double peak_y = -inv_lapD[1][1] * Dx - inv_lapD[1][1] * Dy - inv_lapD[1][2] * Ds;
+		double peak_s = -inv_lapD[2][1] * Dx - inv_lapD[2][1] * Dy - inv_lapD[2][2] * Ds;
+		float peak_val = D + 0.5*(Dx*peak_x + Dy*peak_y + Ds*peak_s);
+		
+		// Eliminate kp if peak_val<PEAK_THRESH (low contrast) or score>EDGE_THRESH (along an edge)
+		if (abs(peak_val) < PEAK_THRESH)
+			continue;
+
+		float score = (Dxx + Dyy)*(Dxx + Dyy) / (Dxx*Dyy - Dxy*Dxy);
+		if (score > EDGE_THRESH)
+			continue;
+
+		// Pass, store in new vector
+		refined_kp.push_back(Point(loc));
+		refined_kp_scale.push_back(Point(scale));
+	}
+	kp.clear();
+	kp_scale.clear();
+
+	cout << "# of keypoints (after refinement) = " << refined_kp.size() << endl;
+
+
+	//printMat(my_gaussian(SIGMA, 5), 3);
+	//printMat(my_gaussian(SIGMA*pow(2.0,0.25), 5), 3);
+
+	//printMat(DoG[0], 3);
+	//printMat(DoG[1], 3);
+	//printMat(DoG[2], 3);
+	//printMat(DoG[3], 3);
+
+	//printMat(img_DoG[0](Rect(100, 100, 8, 8)), 3);
+	//printMat(img_DoG[1](Rect(100, 100, 8, 8)), 3);
+	//printMat(img_DoG[2](Rect(100, 100, 8, 8)), 3);
+	//printMat(img_DoG[3](Rect(100, 100, 8, 8)), 3);
+
+	/*
 	Mat img_out;
 	cvtColor(img, img_out, CV_GRAY2BGR);
 	namedWindow("Original", WINDOW_AUTOSIZE);
@@ -247,6 +297,23 @@ int main(int argc, char** argv)
 	namedWindow("KP", WINDOW_AUTOSIZE);
 	imshow("KP", img_out);
 	waitKey(0);
+	*/
+
 	
+	Mat* g_pyramid = new Mat[n_oct*(N_SCALE + 2)];
+	build_gaussian_pyramid(img_float, g_pyramid, N_OCT);
+	Mat* Grad_x = new Mat[n_oct*(N_SCALE + 2)];
+	Mat* Grad_y = new Mat[n_oct*(N_SCALE + 2)];
+	build_gradient(g_pyramid, Grad_x, Grad_y, N_OCT);
+	Mat* mag = new Mat[n_oct*(N_SCALE + 2)];
+	Mat* theta = new Mat[n_oct*(N_SCALE + 2)];
+	build_mag_orient(Grad_x, Grad_y, mag, theta, N_OCT);
+
+
+	waitKey(0);
 	return 0;
 }
+
+// To display a float img, first need to convert to char type
+// Mat img_out;
+// img_float.convertTo(img_out, CV_8U);
