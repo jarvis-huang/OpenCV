@@ -13,7 +13,8 @@ using namespace cv;
 using namespace std;
 
 
-
+// TODO:
+//	1. Move memory allocation to inside functions. Use (Mat*&) as function param type.
 
 
 
@@ -29,43 +30,7 @@ Mat self_kernel(int radius)
 }
 
 
-// Default:
-//  n_oct = number of octaves
-//  n_scale = 3, means how many intermediate scales between si and 2*si
-Mat* build_DoG(int n_oct, int n_scale = N_SCALE, float sigma = SIGMA)
-{
-	/*
-		Treat DoG as 2D array of Mat: DoG[n_oct][n_scale+1].
-		1st index denotes which octave. 2nd index denotes which scale within that octave.
-		However, new int[sizeY][sizeX] requires sizeX to be constant.
-		So we implement with 1D array of size n_oct*(n_scale+1).
-		DoG[i][j] => Dog[i*(n_scale+1)+j]
-		Dog[i][j] = G(2^(i+(j+1)/4)*sigma) - G(2^(i+j/4)*sigma), assume n_scale=3
-		For octave[i], lowest scale = 2^i*sigma, highest scale = 2^(i+1)*sigma. There are 3 intermediate scales in btwn.
-		Other than octave[0] which has lowest scale = sigma, other octaves have their lowest scale obtained from downsampling the highest scale of previous octave
-		therefore no smoothing is performed and kernel should be 1 (matrix with a single 1 in the center)
-	*/
-	Mat* DoG = new Mat[n_oct*(n_scale+1)]; 
-	int idx = 0;
-	for (int i = 0; i < n_oct; i++) {
-		for (int j = 0; j <= n_scale; j++) {
-			double scale_cur = pow(2.0, i+j/(n_scale + 1.0))*sigma;
-			double scale_nxt = pow(2.0, i+(j+1)/(n_scale + 1.0))*sigma;
-			int r = (int)ceil(scale_nxt*3); // choose size from higher scale Mat, use 3-sigma rule
-			Mat G_cur, G_nxt;
-			if (i == 0 && j == 0) // first octave first scale
-				G_cur = my_gaussian(sigma, r);
-			else if (i>0 && j==0)// other octave first scale, form a matrix with a single 1 in the center
-				G_cur = self_kernel(r);
-			else // any octave non-first scale
-				G_cur = my_gaussian(scale_cur, r);
-			
-			G_nxt = my_gaussian(scale_nxt, r);
-			DoG[idx++] = G_nxt - G_cur;
-		}
-	}
-	return DoG;
-}
+
 
 
 
@@ -102,40 +67,21 @@ int main(int argc, char** argv)
 	img = imread(argv[1], IMREAD_GRAYSCALE);
 	img.convertTo(img_float, CV_32F);
 	
-	//int n_oct = (int)ceil(log2((double)fmin(img.rows, img.cols)));
+	// Option:
+	//     int n_oct = (int)ceil(log2((double)fmin(img.rows, img.cols)));
 	int n_oct = 7;
+	Mat* g_pyramid = new Mat[n_oct*(N_SCALE + 2)];
+	cout << "building Gaussian pyramid ..." << endl;
+	build_gaussian_pyramid(img_float, g_pyramid, N_OCT);
 	cout << "building DoG ..." << endl;
-	Mat* DoG = build_DoG(n_oct);
+	Mat* DoG = new Mat[n_oct*(N_SCALE + 1)];
+	build_DoG(g_pyramid, DoG, n_oct);
 
-	//printMat(DoG[0]*10000, 2);
-	//printMat(DoG[1]*10000, 2);
-	//printMat(DoG[2]*10000, 2);
-
-	// Convolve DoG with image
-	Mat* img_DoG = new Mat[n_oct*(N_SCALE + 1)];
-	int idx = 0;
-	Mat start_img = img_float;
-	Mat temp;
-	const Mat GAUSSIAN_TWO_SIGMA = my_gaussian(2 * SIGMA, (int)ceil(2 * SIGMA * 3));
-
-	cout << "convolving with DoG ..." << endl;
-	for (int i = 0; i < n_oct; i++) {
-		for (int j = 0; j <= N_SCALE; j++) {
-			// Another option is to use GaussianBlur() library function
-			filter2D(start_img, temp, CV_32F, DoG[idx]);
-			img_DoG[idx++] = temp.clone();
-		}
-		filter2D(start_img, temp, CV_32F, GAUSSIAN_TWO_SIGMA); // apply 2*sigma kernel on lowest scale
-		downsample(temp, start_img); // downsample for next octave
-	}
-
-	//printMat(img_float(Rect(100, 100, 8, 8)), 3);
-	//printMat(img_DoG[0](Rect(100, 100, 8, 8)), 3);
-	//printMat(img_DoG[1](Rect(100, 100, 8, 8)), 3);
+	//printMat(DoG[0](Rect(100, 100, 8, 8)), 3);
 
 
-	// Search for extrema within img_DoG[n_oct][n_scale+1]
-	// For each point in img_DoG[i][j], compare with neighboring points within same image, as well as img_DoG[i][j-1] and img_DoG[i][j+1]
+	// Search for extrema within DoG[n_oct][n_scale+1]
+	// For each point in DoG[i][j], compare with neighboring points within same image, as well as DoG[i][j-1] and DoG[i][j+1]
 	// Never compare images of different octaves.
 	// Also lowest and highest scale images within each octave do not produce any output since they don't have lower/higher scale neighbor.
 	// The output is keypoint locations (x,y). We use Vector<Point> to store them.
@@ -144,9 +90,9 @@ int main(int argc, char** argv)
 	cout << "searching for extrema ..." << endl;
 	for (int i = 0; i < n_oct; i++) {
 		for (int j = 1; j <= N_SCALE-1; j++) {
-			Mat prv = img_DoG[i*(N_SCALE + 1) + j-1];
-			Mat cur = img_DoG[i*(N_SCALE + 1) + j];
-			Mat nxt = img_DoG[i*(N_SCALE + 1) + j+1];
+			Mat prv = DoG[i*(N_SCALE + 1) + j - 1];
+			Mat cur = DoG[i*(N_SCALE + 1) + j];
+			Mat nxt = DoG[i*(N_SCALE + 1) + j + 1];
 			Mat prev_cur_nxt[] = { cur, prv, nxt };
 
 			// Skip boundary pixels
@@ -226,15 +172,15 @@ int main(int argc, char** argv)
 		int x = loc.x;
 		int y = loc.y;
 		Point scale = kp_scale.at(i);
-		Mat img_cur = img_DoG[scale.x*(N_SCALE+1) + scale.y];
+		Mat img_cur = DoG[scale.x*(N_SCALE + 1) + scale.y];
 		float D = img_cur.at<float>(y, x);
 		float Dx = 0.5*(img_cur.at<float>(y, x + 1) - img_cur.at<float>(y, x - 1));
 		float Dy = 0.5*(img_cur.at<float>(y + 1, x) - img_cur.at<float>(y - 1, x));
 		float Dxx = img_cur.at<float>(y, x + 1) + img_cur.at<float>(y, x - 1) - 2 * img_cur.at<float>(y, x);
 		float Dyy = img_cur.at<float>(y+1, x) + img_cur.at<float>(y-1, x) - 2 * img_cur.at<float>(y, x);
 		float Dxy = 0.25*(img_cur.at<float>(y + 1, x + 1) + img_cur.at<float>(y - 1, x - 1) - img_cur.at<float>(y + 1, x - 1) - img_cur.at<float>(y - 1, x + 1));
-		Mat img_higher = img_DoG[scale.x*(N_SCALE + 1) + scale.y+1];
-		Mat img_lower = img_DoG[scale.x*(N_SCALE + 1) + scale.y - 1];
+		Mat img_higher = DoG[scale.x*(N_SCALE + 1) + scale.y + 1];
+		Mat img_lower = DoG[scale.x*(N_SCALE + 1) + scale.y - 1];
 		float Ds = 0.5*(img_higher.at<float>(y, x) - img_lower.at<float>(y, x));
 		float Dss = img_higher.at<float>(y, x) + img_lower.at<float>(y, x) - 2 * img_cur.at<float>(y, x);
 		float Dxs = 0.25*(img_higher.at<float>(y, x + 1) + img_lower.at<float>(y, x - 1) - img_higher.at<float>(y, x - 1) - img_lower.at<float>(y, x + 1));
@@ -272,20 +218,6 @@ int main(int argc, char** argv)
 
 	cout << "# of keypoints (after refinement) = " << refined_kp.size() << endl;
 
-
-	//printMat(my_gaussian(SIGMA, 5), 3);
-	//printMat(my_gaussian(SIGMA*pow(2.0,0.25), 5), 3);
-
-	//printMat(DoG[0], 3);
-	//printMat(DoG[1], 3);
-	//printMat(DoG[2], 3);
-	//printMat(DoG[3], 3);
-
-	//printMat(img_DoG[0](Rect(100, 100, 8, 8)), 3);
-	//printMat(img_DoG[1](Rect(100, 100, 8, 8)), 3);
-	//printMat(img_DoG[2](Rect(100, 100, 8, 8)), 3);
-	//printMat(img_DoG[3](Rect(100, 100, 8, 8)), 3);
-
 	/*
 	Mat img_out;
 	cvtColor(img, img_out, CV_GRAY2BGR);
@@ -300,14 +232,19 @@ int main(int argc, char** argv)
 	*/
 
 	
-	Mat* g_pyramid = new Mat[n_oct*(N_SCALE + 2)];
-	build_gaussian_pyramid(img_float, g_pyramid, N_OCT);
+
 	Mat* Grad_x = new Mat[n_oct*(N_SCALE + 2)];
 	Mat* Grad_y = new Mat[n_oct*(N_SCALE + 2)];
+	cout << "building gradient ..." << endl;
 	build_gradient(g_pyramid, Grad_x, Grad_y, N_OCT);
 	Mat* mag = new Mat[n_oct*(N_SCALE + 2)];
 	Mat* theta = new Mat[n_oct*(N_SCALE + 2)];
+	cout << "building magnitude and orientation ..." << endl;
 	build_mag_orient(Grad_x, Grad_y, mag, theta, N_OCT);
+	vector<float> angles(refined_kp.size());
+	Point one_kp = refined_kp.at(0);
+	Point one_kp_scale = refined_kp_scale.at(0);
+	get_kp_orient(mag, theta, one_kp, one_kp_scale, angles, N_OCT);
 
 
 	waitKey(0);

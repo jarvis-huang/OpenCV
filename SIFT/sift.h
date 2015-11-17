@@ -161,7 +161,17 @@ Mat my_gaussian(double sigma, int radius)
 	return G;
 }
 
-// returns an array of Mat, size = n_oct*(N_SCALE+2)
+
+/*
+	Returns an array of Mat, size = n_oct*(N_SCALE+2)
+	n_oct = number of octaves
+	n_scale = how many intermediate scales between si and 2*si (default=3)
+	Logically treat as 2D array of Mat: DoG[n_oct][n_scale+1]. 1st index: which octave; 2nd index: which scale within that octave.
+	But we implement as 1D array of size n_oct*(n_scale+1), since "new int[sizeY][sizeX]" requires sizeX to be constant.
+	Pyramid_2d[i][j] => Pyramid_1d[i*(n_scale+1)+j], scale = 2^(i+j/4)*sigma, assume n_scale=3
+	For octave[i], lowest scale = 2^i*sigma, highest scale = 2^(i+1)*sigma. By default there are 3 intermediate scales in btwn.
+	Lowest scale of octave[n+1] = highest scale of scale[n] downsampled by 2.
+*/
 void build_gaussian_pyramid(const Mat& img, Mat* dst, int n_oct)
 {
 	int idx = 0;
@@ -186,6 +196,7 @@ void build_gaussian_pyramid(const Mat& img, Mat* dst, int n_oct)
 	}
 }
 
+// Size = n_oct*(N_SCALE + 2)
 void build_gradient(const Mat* pyramid, Mat* Grad_x, Mat* Grad_y, int n_oct)
 {
 	Mat L;
@@ -221,6 +232,38 @@ void build_gradient(const Mat* pyramid, Mat* Grad_x, Mat* Grad_y, int n_oct)
 	}
 }
 
+
+/*
+	Returns an array of Mat, size = n_oct*(N_SCALE+1)
+	n_oct = number of octaves
+	n_scale = how many intermediate scales between si and 2*si (default=3)
+	Logically treat DoG as 2D array of Mat: DoG[n_oct][n_scale+1].
+	1st index denotes which octave. 2nd index denotes which scale within that octave.
+	However, new int[sizeY][sizeX] requires sizeX to be constant.
+	So we implement with 1D array of size n_oct*(n_scale+1).
+*/
+void build_DoG(const Mat* pyramid, Mat* DoG, int n_oct, int n_scale = N_SCALE, float sigma = SIGMA)
+{
+
+	int idx_dog = 0;
+	int idx_pyr = 0;
+	for (int i = 0; i < n_oct; i++) {
+		for (int j = 0; j <= n_scale; j++) {
+			double scale_cur = pow(2.0, i + j / (n_scale + 1.0))*sigma;
+			double scale_nxt = pow(2.0, i + (j + 1) / (n_scale + 1.0))*sigma;
+			int r = (int)ceil(scale_nxt * 3); // choose size from higher scale Mat, use 3-sigma rule
+			Mat G_cur, G_nxt;
+			G_cur = pyramid[idx_pyr];
+			G_nxt = pyramid[idx_pyr + 1];
+			DoG[idx_dog++] = G_nxt - G_cur;
+			idx_pyr++;
+		}
+		idx_pyr++; // skip the highest scale of each octave
+	}
+}
+
+
+
 void build_mag_orient(const Mat* Grad_x, const Mat* Grad_y, Mat* mag, Mat* theta, int n_oct)
 {
 	Mat g_x, g_y;
@@ -234,6 +277,67 @@ void build_mag_orient(const Mat* Grad_x, const Mat* Grad_y, Mat* mag, Mat* theta
 				mag[idx].at<float>(r, c) = 2 * sqrt(g_x.at<float>(r, c)*g_x.at<float>(r, c) + g_y.at<float>(r, c)*g_y.at<float>(r, c));
 				theta[idx].at<float>(r, c) = atan2(g_y.at<float>(r, c), g_x.at<float>(r, c));
 			}
+		}
+	}
+}
+
+#define N_BINS 8
+
+// Assign orientation for ONE kp
+void get_kp_orient(const Mat* mag, const Mat* theta, const Point kp, const Point kp_scale, vector<float>& angles, int n_oct)
+{
+	// Initialize the orientation histogram
+	float hist[N_BINS];
+	for (int n = 0; n < N_BINS - 1; n++)
+		hist[n] = 0;
+
+	// Get kp's location and scale
+	int x = kp.x;
+	int y = kp.y;
+	Mat mat_mag = mag[kp_scale.x*(N_SCALE + 2) + kp_scale.y];
+	Mat mat_theta = theta[kp_scale.x*(N_SCALE + 2) + kp_scale.y];
+
+	// Now draw a circle around (x,y) and collect samples into a hist. Here's how.
+	// Similar thetas fall into same bin. Value is mag weighted by distance to (x,y).
+	// Circle radius = (simga*1.5) * 3
+	float sigmaw = SIGMA * 1.5;
+	float radius = sigmaw * 3;
+	int x_min = fmax(0, (floor)(x - radius));
+	int x_max = fmin(mat_mag.cols - 1, (ceil)(x + radius));
+	int y_min = fmax(0, (floor)(y - radius));
+	int y_max = fmin(mat_mag.rows - 1, (ceil)(y + radius));
+
+	for (int xi = x_min; xi <= x_max; xi++) {
+		for (int yi = y_min; yi <= y_max; yi++) {
+			float dx = xi - x;
+			float dy = yi - y;
+			float dist2 = dx*dx + dy*dy;
+			if (dist2 > radius*radius) continue; // outside the circle, discard
+			// Find which bin this sample belongs. Assume each bin has range [bin_min, bin_max).
+			float bin_step = 360.0 / N_BINS;
+			int bin_idx = (floor)(mat_theta.at<float>(yi, xi) / bin_step);
+			float weight = exp(dist2 / (2 * sigmaw*sigmaw));
+			float val = mat_mag.at<float>(yi, xi);
+			hist[bin_idx] += val * weight;
+		}
+	}
+
+	// Now hist is populated. Find peak value and its index.
+	float hist_peak = 0;
+	int idx_peak = 0;
+	for (int n = 0; n < N_BINS - 1; n++) {
+		if (hist[n] > hist_peak) {
+			hist_peak = hist[n];
+			idx_peak = n;
+		}
+	}
+	angles.push_back((idx_peak + 0.5)*360.0 / N_BINS); // in degrees
+
+	// Now find 80% within peak
+	for (int n = 0; n < N_BINS - 1; n++) {
+		if (n == idx_peak) continue;
+		if (hist[n] > hist_peak*0.8) {
+			angles.push_back((n + 0.5)*360.0 / N_BINS);
 		}
 	}
 }
