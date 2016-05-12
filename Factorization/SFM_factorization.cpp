@@ -52,8 +52,6 @@ int main(int argc, char** argv)
 		c2 += p2[i];
 	c1 /= n;
 	c2 /= n;
-	//cout << "c1=" << c1 << endl;
-	//cout << "c2=" << c2 << endl;
 
 	// Construct measurement matrix W = (U~, V~), dimension = 2F_rows x P_cols = 4 x 37
 	Mat W(4, n, CV_64F); // two frames (F=2)
@@ -93,26 +91,29 @@ int main(int argc, char** argv)
 	/* 
 	   Since S_cap is subject to affine ambiguity from tru S, we want to find if our ans is correct.
 	   Find the affine transform [A | t] which converts S_cap to true S (from 'set1/pt_3D.txt')
-	   Since true S[31]=(0,0,0), t == -S_cap[31], we subtract S_cap[31] from all S_cap so we only need to solve A
 	   Construct A matrix which is 3*37 x 9 -> A has 9-dof, 9 unknowns
-	   [X    [ a1 a2 a3     [x
-	    Y  =   a4 a5 a6  *   y        
-	    Z]     a7 a8 a9]     z]
+	   [X    [ a1 a2 a3     [x       [t1
+	    Y  =   a4 a5 a6  *   y    +   t2
+	    Z]     a7 a8 a9]     z]       t3]
 	   
 	   can also be expressed as
 
 	   [X    [ x y z 0 0 0 0 0 0 
-	    Y  =   0 0 0 x y z 0 0 0   * [a1 a2 .. a9]'
+	    Y  =   0 0 0 x y z 0 0 0   * [a1 a2 .. a9]' + t
 	    Z]     0 0 0 0 0 0 x y z]
 
-		we call the big matrix M here, and solve for 9 elements of A
+		In the code, we call the big matrix M, and solve for 9 elements of A, left hand side = y
+		y = M*A + t -> we want to minimize |M*A-y|
 	*/
 	Mat M(3 * n, 9, CV_64F, Scalar(0)); // initialize to all zero
 	for (int i = 0; i < M.rows; i=i+3)
 	{
-		double x = S_cap.at<double>(0, i / 3) - S_cap.at<double>(0, 31);
-		double y = S_cap.at<double>(1, i / 3) - S_cap.at<double>(1, 31);
-		double z = S_cap.at<double>(2, i / 3) - S_cap.at<double>(2, 31);
+		//double x = S_cap.at<double>(0, i / 3) - S_cap.at<double>(0, 31);
+		//double y = S_cap.at<double>(1, i / 3) - S_cap.at<double>(1, 31);
+		//double z = S_cap.at<double>(2, i / 3) - S_cap.at<double>(2, 31);
+		double x = S_cap.at<double>(0, i / 3);
+		double y = S_cap.at<double>(1, i / 3);
+		double z = S_cap.at<double>(2, i / 3);
 		M.at<double>(i, 0) = x;
 		M.at<double>(i, 1) = y;
 		M.at<double>(i, 2) = z;
@@ -131,22 +132,37 @@ int main(int argc, char** argv)
 		y.at<double>(3 * i + 1, 0) = p[i].y;
 		y.at<double>(3 * i + 2, 0) = p[i].z;
 	}
-	Mat A = solve_linear(M, y); // 9x1
+	Mat A = solve_linear(M, y); // returns 9x1, minimize |M*A-y|
 
+	// Now try to determine the best translation vector t
 	Mat conv_pts = M * A;
 	conv_pts = conv_pts.reshape(0, n);
-	// Compare conv_pts and p, they should be close
-	cout << endl;
-	double err = 0;
-
-	cout << fixed;
-	cout.precision(2);
-	cout << "   My 3D points            Tru 3D points            err(distance)" << endl;
+	Point3d t(0, 0, 0); // translation vector
 	for (int i = 0; i < n; i++)
 	{
 		Point3d pp(conv_pts.at<double>(i, 0), conv_pts.at<double>(i, 1), conv_pts.at<double>(i, 2));
-		cout << pp << "     " << p[i] << "          -> " << dist(p[i], pp) << endl;
-		err += dist(p[i], pp);
+		t += (p[i] - pp);
+	}
+	t /= n;
+
+	// Display results and compute mean error
+	double err = 0;
+	cout << fixed;
+	cout.precision(2);
+	cout << "         My 3D points            Tru 3D points            err(distance)" << endl;
+	for (int i = 0; i < n; i++)
+	{
+		Point3d pp(conv_pts.at<double>(i, 0), conv_pts.at<double>(i, 1), conv_pts.at<double>(i, 2));
+		// align the output for easy viewing
+		stringstream convert;
+		convert.precision(2);
+		convert << fixed << pp + t;
+		cout << setw(25) << convert.str();
+		stringstream convert2;
+		convert2.precision(2);
+		convert2 << fixed << p[i];
+		cout << setw(25) << convert2.str() <<  "    ->     " << dist(p[i], pp + t) << endl;
+		err += dist(p[i], pp+t);
 	}
 	cout << "-----------" << endl;
 	cout << "Average err = " << err / n << endl;

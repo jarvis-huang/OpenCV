@@ -12,6 +12,8 @@
 using namespace cv;
 using namespace std;
 
+// TO RUN: .\mean_shift.exe .\mean_shift\honey.mp4
+
 #define DEBUG_MODE 0
 // Feature = hue histogram. Definition https://en.wikipedia.org/wiki/HSL_and_HSV#Hue_and_chroma  (Fig. 10)
 // First we convert RGB => Hue, which is an angle from 0~2*pi, split into NBIN bins.
